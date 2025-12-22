@@ -12,8 +12,15 @@ import os
 import subprocess
 import json
 import re
+import copy
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
+
+# ------------------------------------------------------------
+# SECURITY & OUTPUT CONSTANTS
+# ------------------------------------------------------------
+MAX_FILE_SIZE = 1024 * 1024  # 1MB max file read
+MAX_OUTPUT_LINES = 500       # Truncate large outputs
 
 # ------------------------------------------------------------
 # INITIALIZE MCP SERVER
@@ -33,14 +40,71 @@ def get_project_root() -> str:
     return os.environ.get("PROJECT_ROOT", os.getcwd())
 
 
+def _validate_path_security(file_path: str) -> tuple[Path, str | None]:
+    """
+    Validate that a file path is within the project root.
+
+    Returns:
+        tuple: (resolved_path, error_message or None if valid)
+    """
+    project_root = Path(get_project_root()).resolve()
+
+    if os.path.isabs(file_path):
+        full_path = Path(file_path).resolve()
+    else:
+        full_path = (project_root / file_path).resolve()
+
+    try:
+        full_path.relative_to(project_root)
+        return full_path, None
+    except ValueError:
+        return full_path, "⛔ Security: Cannot access files outside project directory"
+
+
+def _truncate_output(content: str, max_lines: int = MAX_OUTPUT_LINES) -> str:
+    """
+    Truncate large outputs showing head + tail with count of skipped lines.
+    """
+    lines = content.split('\n')
+    if len(lines) <= max_lines:
+        return content
+
+    half = max_lines // 2
+    head = lines[:half]
+    tail = lines[-half:]
+    skipped = len(lines) - max_lines
+
+    return '\n'.join(head + [f"\n... ⚡ [{skipped} lines truncated for performance] ...\n"] + tail)
+
+
+def _format_box(title: str, content_lines: list[str], style: str = "double") -> str:
+    """Format content in a visual box for CLI output."""
+    if style == "double":
+        tl, tr, bl, br, h, v = "╔", "╗", "╚", "╝", "═", "║"
+    else:
+        tl, tr, bl, br, h, v = "┌", "┐", "└", "┘", "─", "│"
+
+    width = max(len(title) + 4, max((len(line) for line in content_lines), default=40) + 4, 60)
+
+    result = [f"{tl}{h * (width - 2)}{tr}"]
+    result.append(f"{v}  {title:<{width - 4}}{v}")
+    result.append(f"{tl}{h * (width - 2)}{tr}".replace(tl, "╠").replace(tr, "╣") if style == "double" else f"├{h * (width - 2)}┤")
+
+    for line in content_lines:
+        result.append(f"{v}  {line:<{width - 4}}{v}")
+
+    result.append(f"{bl}{h * (width - 2)}{br}")
+    return '\n'.join(result)
+
+
 # Default configuration - used when no .jest-helper.json exists
 DEFAULT_CONFIG = {
     "style_guide": {
         "test_structure": "describe + it",
         "it_naming": "should + verb",
         "describe_naming": "component/function name",
-        "arrangement": "AAA (Arrange-Act-Assert)",
-        "comments": True,
+        "arrangement": "AAA (Arrange-Act-Assert) structure",
+        "comments": False,
         "imports_order": ["react", "testing-library", "components", "utils", "mocks"],
         "mock_location": "top of file after imports",
         "assertions_per_test": "1-3 related assertions",
@@ -54,43 +118,34 @@ import userEvent from '@testing-library/user-event';
 import { ComponentName } from './ComponentName';
 
 describe('ComponentName', () => {
-  // Arrange: Common setup
   const defaultProps = {};
 
   describe('rendering', () => {
     it('should render without crashing', () => {
-      // Arrange
       const props = { ...defaultProps };
 
-      // Act
       render(<ComponentName {...props} />);
 
-      // Assert
       expect(screen.getByRole('...')).toBeInTheDocument();
     });
   });
 
   describe('interactions', () => {
     it('should handle click events', async () => {
-      // Arrange
       const user = userEvent.setup();
       const mockHandler = jest.fn();
       render(<ComponentName onClick={mockHandler} />);
 
-      // Act
       await user.click(screen.getByRole('button'));
 
-      // Assert
       expect(mockHandler).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('edge cases', () => {
     it('should handle empty props gracefully', () => {
-      // Arrange & Act
       render(<ComponentName />);
 
-      // Assert
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
   });
@@ -101,25 +156,20 @@ import { useHookName } from './useHookName';
 describe('useHookName', () => {
   describe('initialization', () => {
     it('should return initial state', () => {
-      // Arrange & Act
       const { result } = renderHook(() => useHookName());
 
-      // Assert
       expect(result.current.value).toBe(initialValue);
     });
   });
 
   describe('actions', () => {
     it('should update state when action is called', () => {
-      // Arrange
       const { result } = renderHook(() => useHookName());
 
-      // Act
       act(() => {
         result.current.doAction();
       });
 
-      // Assert
       expect(result.current.value).toBe(expectedValue);
     });
   });
@@ -129,62 +179,50 @@ describe('useHookName', () => {
 describe('functionName', () => {
   describe('valid inputs', () => {
     it('should return expected result for valid input', () => {
-      // Arrange
       const input = validInput;
 
-      // Act
       const result = functionName(input);
 
-      // Assert
       expect(result).toBe(expectedOutput);
     });
   });
 
   describe('edge cases', () => {
     it('should handle null input', () => {
-      // Arrange & Act & Assert
       expect(functionName(null)).toBe(defaultValue);
     });
 
     it('should handle undefined input', () => {
-      // Arrange & Act & Assert
       expect(functionName(undefined)).toBe(defaultValue);
     });
 
     it('should handle empty input', () => {
-      // Arrange & Act & Assert
       expect(functionName('')).toBe(defaultValue);
     });
   });
 
   describe('error cases', () => {
     it('should throw for invalid input', () => {
-      // Arrange & Act & Assert
       expect(() => functionName(invalidInput)).toThrow();
     });
   });
 });''',
         "api_service": '''import { apiFunction } from './api';
 
-// Mock dependencies
 jest.mock('./httpClient');
 
 describe('apiFunction', () => {
-  // Arrange: Common setup
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   describe('successful requests', () => {
     it('should return data on success', async () => {
-      // Arrange
       const mockResponse = { data: 'test' };
       httpClient.get.mockResolvedValue(mockResponse);
 
-      // Act
       const result = await apiFunction();
 
-      // Assert
       expect(result).toEqual(mockResponse);
       expect(httpClient.get).toHaveBeenCalledWith('/endpoint');
     });
@@ -192,10 +230,8 @@ describe('apiFunction', () => {
 
   describe('error handling', () => {
     it('should handle network errors', async () => {
-      // Arrange
       httpClient.get.mockRejectedValue(new Error('Network error'));
 
-      // Act & Assert
       await expect(apiFunction()).rejects.toThrow('Network error');
     });
   });
@@ -204,11 +240,11 @@ describe('apiFunction', () => {
     "validation_rules": [
         {"id": "has_describe", "description": "Test must use describe() blocks", "pattern": r"describe\s*\("},
         {"id": "has_it_or_test", "description": "Test must use it() or test()", "pattern": r"(it|test)\s*\("},
-        {"id": "it_uses_should", "description": "it() should start with 'should'", "pattern": r"it\s*\(\s*['\"]should"},
+        {"id": "it_uses_should", "description": "it() should start with 'should'", "pattern": r"it\s*\(\s*['\"]should", "warning": True},
         {"id": "has_assertions", "description": "Test must have assertions", "pattern": r"expect\s*\("},
-        {"id": "has_aaa_comments", "description": "Test should have AAA comments", "pattern": r"//\s*(Arrange|Act|Assert)"},
-        {"id": "no_only", "description": "No .only() in tests", "pattern": r"\.(only|skip)\s*\(", "must_not_match": True},
-        {"id": "has_edge_cases", "description": "Should test edge cases", "pattern": r"(null|undefined|empty|error)"}
+        {"id": "has_aaa_comments", "description": "Test should have AAA comments (optional)", "pattern": r"//\s*(Arrange|Act|Assert)", "warning": True},
+        {"id": "no_only", "description": "No .only() or .skip() in tests", "pattern": r"\.(only|skip)\s*\(", "must_not_match": True},
+        {"id": "has_edge_cases", "description": "Should test edge cases", "pattern": r"(null|undefined|empty|error)", "warning": True}
     ]
 }
 
@@ -222,8 +258,8 @@ def load_config() -> dict:
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
-            # Merge with defaults (user config takes precedence)
-            merged = DEFAULT_CONFIG.copy()
+            # Deep copy to prevent mutation of DEFAULT_CONFIG
+            merged = copy.deepcopy(DEFAULT_CONFIG)
             for key in user_config:
                 if isinstance(user_config[key], dict) and key in merged:
                     merged[key] = {**merged[key], **user_config[key]}
@@ -233,7 +269,7 @@ def load_config() -> dict:
         except (json.JSONDecodeError, IOError):
             pass
 
-    return DEFAULT_CONFIG
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 # ============================================================
@@ -298,13 +334,10 @@ def read_file(file_path: str) -> str:
     Returns:
         The file contents.
     """
-    project_root = get_project_root()
-
-    # Handle both relative and absolute paths
-    if os.path.isabs(file_path):
-        full_path = Path(file_path)
-    else:
-        full_path = Path(project_root) / file_path
+    # Security: Validate path is within project
+    full_path, error = _validate_path_security(file_path)
+    if error:
+        return error
 
     if not full_path.exists():
         return f"Error: File not found: {full_path}"
@@ -312,9 +345,14 @@ def read_file(file_path: str) -> str:
     if not full_path.is_file():
         return f"Error: Not a file: {full_path}"
 
+    # Security: Check file size before reading
+    file_size = full_path.stat().st_size
+    if file_size > MAX_FILE_SIZE:
+        return f"⚠️ File too large ({file_size:,} bytes). Max: {MAX_FILE_SIZE:,} bytes"
+
     try:
         content = full_path.read_text(encoding="utf-8")
-        return content
+        return _truncate_output(content)
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -346,12 +384,12 @@ def find_source_for_test(test_file_path: str) -> str:
         # Check same directory
         same_dir = test_path.parent / f"{source_name}{ext}"
         if same_dir.exists():
-            candidates.append(str(same_dir.relative_to(project_root)))
+            candidates.append(str(same_dir.relative_to(Path(project_root))))
 
         # Check parent directory (for __tests__ folders)
         parent_dir = test_path.parent.parent / f"{source_name}{ext}"
         if parent_dir.exists():
-            candidates.append(str(parent_dir.relative_to(project_root)))
+            candidates.append(str(parent_dir.relative_to(Path(project_root))))
 
     if not candidates:
         return f"Could not find source file for {test_file_path}. Expected something like {source_name}.tsx"
@@ -536,75 +574,78 @@ def analyze_test_patterns(sample_count: int = 5) -> str:
         except Exception:
             continue
 
-    # Format output
+    # Format output with visual boxes
     output = [
-        "# 🔬 DEEP TEST PATTERN ANALYSIS",
+        f"╔{'═' * 60}╗",
+        f"║  🔬 TEST PATTERN ANALYSIS{' ' * 34}║",
+        f"╚{'═' * 60}╝",
         "",
-        "**IMPORTANT: Claude MUST follow these patterns exactly when writing tests.**",
+        f"Analyzed {len(analysis['files_analyzed'])} files. Follow these patterns exactly.",
         "",
-        f"## Files Analyzed: {len(analysis['files_analyzed'])}",
     ]
+
+    # Files analyzed
+    output.append("┌─ Files Analyzed ───────────────────────────────────────────┐")
     for f in analysis["files_analyzed"]:
-        output.append(f"  - `{f}`")
+        output.append(f"│ • {f[:57]:<57}│")
+    output.append("└────────────────────────────────────────────────────────────┘")
     output.append("")
 
-    # Test structure
-    output.append("## Test Structure")
-    output.append(f"- **Pattern Used:** `{' / '.join(analysis['test_structure']) or 'Unknown'}`")
-    output.append(f"- **Uses AAA Comments:** `{analysis['uses_aaa_comments']}`")
-    output.append(f"- **Uses beforeEach:** `{analysis['beforeEach_usage']}`")
-    output.append(f"- **Uses afterEach:** `{analysis['afterEach_usage']}`")
+    # Test structure summary
+    output.append("┌─ Test Structure ───────────────────────────────────────────┐")
+    output.append(f"│ Pattern      : {' / '.join(analysis['test_structure']) or 'Unknown':<44}│")
+    output.append(f"│ beforeEach   : {'✓ Yes' if analysis['beforeEach_usage'] else '✗ No':<44}│")
+    output.append(f"│ afterEach    : {'✓ Yes' if analysis['afterEach_usage'] else '✗ No':<44}│")
+    output.append(f"│ AAA Comments : {'✓ Yes' if analysis['uses_aaa_comments'] else '✗ No':<44}│")
+    output.append("└────────────────────────────────────────────────────────────┘")
     output.append("")
 
     # Naming conventions
-    output.append("## Naming Conventions")
-    output.append("**describe() names used:**")
-    for name in list(set(analysis["describe_naming"]))[:5]:
-        output.append(f"  - `{name}`")
-    output.append("")
-    output.append("**it()/test() names used:**")
-    for name in list(set(analysis["it_naming"]))[:8]:
-        output.append(f"  - `{name}`")
-    output.append("")
-
-    # Imports
-    output.append("## Import Patterns")
-    output.append("**Libraries used:**")
-    for lib in set(analysis["import_patterns"]):
-        output.append(f"  - `{lib}`")
-    output.append("")
-    output.append("**Common utilities:**")
-    output.append(f"  `{', '.join(sorted(analysis['common_utilities']))}`")
+    output.append("┌─ Naming Conventions ──────────────────────────────────────┐")
+    output.append("│ describe() examples:                                       │")
+    for name in list(set(analysis["describe_naming"]))[:4]:
+        output.append(f"│   • {name[:54]:<54}│")
+    output.append("│ it()/test() examples:                                      │")
+    for name in list(set(analysis["it_naming"]))[:4]:
+        output.append(f"│   • {name[:54]:<54}│")
+    output.append("└────────────────────────────────────────────────────────────┘")
     output.append("")
 
-    if analysis["example_imports"]:
-        output.append("**Example import block:**")
-        output.append("```typescript")
-        output.append(analysis["example_imports"])
-        output.append("```")
+    # Imports & Utilities
+    output.append("┌─ Libraries & Utilities ─────────────────────────────────────┐")
+    libs = list(set(analysis["import_patterns"]))
+    if libs:
+        output.append(f"│ Libraries: {', '.join(libs)[:48]:<48}│")
+    utils = ', '.join(sorted(analysis['common_utilities']))
+    output.append(f"│ Utilities: {utils[:48]:<48}│")
+    output.append("└────────────────────────────────────────────────────────────┘")
+    output.append("")
+
+    # Mocking patterns
+    if analysis["mocking_patterns"]:
+        output.append("┌─ Mocking Patterns ──────────────────────────────────────────┐")
+        for mock in list(analysis["mocking_patterns"])[:5]:
+            output.append(f"│ • {mock[:56]:<56}│")
+        output.append("└────────────────────────────────────────────────────────────┘")
         output.append("")
 
-    # Mocking
-    output.append("## Mocking Patterns")
-    for mock in analysis["mocking_patterns"]:
-        output.append(f"  - `{mock}`")
-    output.append("")
+    # Assertion patterns
+    if analysis["assertion_patterns"]:
+        output.append("┌─ Assertion Patterns ────────────────────────────────────────┐")
+        assertions = ', '.join(analysis["assertion_patterns"])
+        output.append(f"│ {assertions[:58]:<58}│")
+        output.append("└────────────────────────────────────────────────────────────┘")
+        output.append("")
 
-    # Assertions
-    output.append("## Assertion Patterns")
-    for assertion in analysis["assertion_patterns"]:
-        output.append(f"  - `{assertion}`")
-    output.append("")
-
-    # Real examples
+    # Real example
     if analysis["example_it"]:
-        output.append("## Real Example: it() block from codebase")
+        output.append("## Real Example from Codebase")
         output.append("```typescript")
         output.append(analysis["example_it"])
         output.append("```")
         output.append("")
 
-    output.append("---")
+    output.append("─" * 62)
     output.append("**Use these exact patterns when writing new tests.**")
 
     return "\n".join(output)
@@ -664,6 +705,7 @@ def run_tests(
         )
 
         output = result.stdout + "\n" + result.stderr
+        output = _truncate_output(output)
 
         # Add summary at the top
         if result.returncode == 0:
@@ -749,8 +791,14 @@ def update_test_section(
     Returns:
         Success or error message.
     """
-    project_root = get_project_root()
-    full_path = Path(project_root) / file_path
+    # Security: Validate path is within project
+    full_path, error = _validate_path_security(file_path)
+    if error:
+        return error
+
+    # Security: Only allow updating test files
+    if not any(pattern in file_path for pattern in ['.test.', '.spec.']):
+        return "⛔ Security: Can only update test files (.test.* or .spec.*)"
 
     if not full_path.exists():
         return f"Error: File not found: {file_path}"
@@ -872,53 +920,52 @@ def get_test_style_guide() -> str:
     style = config.get("style_guide", {})
 
     guide = [
-        "# 📋 TEAM TEST STYLE GUIDE",
+        f"╔{'═' * 60}╗",
+        f"║  📋 TEAM TEST STYLE GUIDE{' ' * 34}║",
+        f"╚{'═' * 60}╝",
         "",
-        "**IMPORTANT: Follow these rules exactly for consistency across all developers.**",
+        "Follow these rules exactly for consistency across all developers.",
         "",
-        "## Structure",
-        f"- **Test Structure:** Use `{style.get('test_structure', 'describe + it')}`",
-        f"- **it() Naming:** `{style.get('it_naming', 'should + verb')}` (e.g., `it('should render button')`)",
-        f"- **describe() Naming:** `{style.get('describe_naming', 'component/function name')}`",
+        "┌─ Structure ────────────────────────────────────────────────┐",
+        f"│ Test Structure   : {style.get('test_structure', 'describe + it'):<40}│",
+        f"│ it() Naming      : {style.get('it_naming', 'should + verb'):<40}│",
+        f"│ describe() Naming: {style.get('describe_naming', 'component/function name'):<40}│",
+        "└────────────────────────────────────────────────────────────┘",
         "",
-        "## Code Organization",
-        f"- **Test Arrangement:** `{style.get('arrangement', 'AAA (Arrange-Act-Assert)')}`",
-        f"- **Use AAA Comments:** `{style.get('comments', True)}`",
-        f"- **Imports Order:** `{' → '.join(style.get('imports_order', []))}`",
-        f"- **Mock Location:** `{style.get('mock_location', 'top of file after imports')}`",
+        "┌─ Code Organization ────────────────────────────────────────┐",
+        f"│ Arrangement      : {style.get('arrangement', 'AAA structure'):<40}│",
+        f"│ Imports Order    : {' → '.join(style.get('imports_order', []))[:40]:<40}│",
+        f"│ Mock Location    : {style.get('mock_location', 'top of file'):<40}│",
+        "└────────────────────────────────────────────────────────────┘",
         "",
-        "## Test Quality",
-        f"- **Assertions per Test:** `{style.get('assertions_per_test', '1-3 related assertions')}`",
-        f"- **Required Edge Cases:** `{', '.join(style.get('edge_cases_required', []))}`",
+        "┌─ Test Quality ─────────────────────────────────────────────┐",
+        f"│ Assertions/Test  : {style.get('assertions_per_test', '1-3'):<40}│",
+        f"│ Edge Cases       : {', '.join(style.get('edge_cases_required', []))[:40]:<40}│",
+        "└────────────────────────────────────────────────────────────┘",
         "",
-        "## Example Naming:",
+        "## Example: Good vs Bad Naming",
         "```javascript",
         "// ✅ CORRECT",
         "describe('Button', () => {",
         "  it('should render with default props', () => { ... });",
         "  it('should call onClick when clicked', () => { ... });",
-        "  it('should be disabled when disabled prop is true', () => { ... });",
         "});",
         "",
         "// ❌ INCORRECT",
         "describe('Button tests', () => {",
         "  it('renders', () => { ... });",
         "  it('click works', () => { ... });",
-        "  test('disabled', () => { ... });",
         "});",
         "```",
         "",
-        "## Example Structure:",
+        "## Example: Clean Test Structure",
         "```javascript",
         "it('should handle form submission', async () => {",
-        "  // Arrange",
         "  const mockSubmit = jest.fn();",
         "  render(<Form onSubmit={mockSubmit} />);",
         "",
-        "  // Act",
         "  await userEvent.click(screen.getByRole('button', { name: 'Submit' }));",
         "",
-        "  // Assert",
         "  expect(mockSubmit).toHaveBeenCalledTimes(1);",
         "});",
         "```",
@@ -928,9 +975,10 @@ def get_test_style_guide() -> str:
     custom_rules = style.get('custom_rules', [])
     if custom_rules:
         guide.append("")
-        guide.append("## Custom Team Rules")
+        guide.append("┌─ Custom Team Rules ────────────────────────────────────────┐")
         for rule in custom_rules:
-            guide.append(f"- {rule}")
+            guide.append(f"│ • {rule:<57}│")
+        guide.append("└────────────────────────────────────────────────────────────┘")
 
     return "\n".join(guide)
 
@@ -1014,16 +1062,10 @@ def validate_test_style(test_file_path: str) -> str:
     config = load_config()
     rules = config.get("validation_rules", [])
 
-    results = []
+    rule_results = []
     passed = 0
     failed = 0
     warnings = 0
-
-    results.append("# 🔍 TEST STYLE VALIDATION REPORT")
-    results.append(f"**File:** {test_file_path}")
-    results.append("")
-    results.append("## Results")
-    results.append("")
 
     for rule in rules:
         rule_id = rule.get("id", "unknown")
@@ -1039,40 +1081,57 @@ def validate_test_style(test_file_path: str) -> str:
             matches = bool(re.search(pattern, content, re.MULTILINE | re.IGNORECASE))
 
             if must_not_match:
-                # Rule passes if pattern is NOT found
                 if matches:
                     failed += 1
-                    results.append(f"❌ **FAIL:** {description}")
+                    rule_results.append(f"│ ❌ FAIL   {description}")
                 else:
                     passed += 1
-                    results.append(f"✅ **PASS:** {description}")
+                    rule_results.append(f"│ ✅ PASS   {description}")
             else:
-                # Rule passes if pattern IS found
                 if matches:
                     passed += 1
-                    results.append(f"✅ **PASS:** {description}")
+                    rule_results.append(f"│ ✅ PASS   {description}")
                 else:
                     if is_warning:
                         warnings += 1
-                        results.append(f"⚠️ **WARN:** {description}")
+                        rule_results.append(f"│ ⚠️  WARN   {description}")
                     else:
                         failed += 1
-                        results.append(f"❌ **FAIL:** {description}")
+                        rule_results.append(f"│ ❌ FAIL   {description}")
         except re.error:
-            results.append(f"⚠️ **SKIP:** Invalid pattern for {rule_id}")
+            rule_results.append(f"│ ⚠️  SKIP   Invalid regex: {rule_id}")
 
+    # Build visual output
+    width = 64
+    h = "═"
+    results = []
+
+    # Header box
+    results.append(f"╔{h * width}╗")
+    results.append(f"║  🔍 TEST STYLE VALIDATION REPORT{' ' * (width - 34)}║")
+    results.append(f"╠{h * width}╣")
+    results.append(f"║  File: {test_file_path[:width-10]:<{width-9}}║")
+    results.append(f"╚{h * width}╝")
     results.append("")
-    results.append("## Summary")
-    results.append(f"- ✅ Passed: {passed}")
-    results.append(f"- ❌ Failed: {failed}")
-    results.append(f"- ⚠️ Warnings: {warnings}")
+
+    # Results section
+    results.append(f"┌─ Validation Results {'─' * (width - 21)}┐")
+    results.extend(rule_results)
+    results.append(f"└{'─' * width}┘")
+    results.append("")
+
+    # Summary section
+    total = passed + failed + warnings
+    status_icon = "🎉" if failed == 0 else "⚠️"
+    results.append(f"┌─ Summary {'─' * (width - 10)}┐")
+    results.append(f"│ ✅ Passed: {passed}  │  ❌ Failed: {failed}  │  ⚠️ Warnings: {warnings}  │  Total: {total}")
+    results.append(f"└{'─' * width}┘")
+    results.append("")
 
     if failed == 0:
-        results.append("")
-        results.append("🎉 **Test file meets all style requirements!**")
+        results.append(f"{status_icon} Test file meets all required style rules!")
     else:
-        results.append("")
-        results.append("⚠️ **Please fix the failed rules before committing.**")
+        results.append(f"{status_icon} Please fix {failed} failed rule(s) before committing.")
 
     return "\n".join(results)
 
@@ -1100,8 +1159,8 @@ def init_style_config() -> str:
             "test_structure": "describe + it",
             "it_naming": "should + verb",
             "describe_naming": "component/function name",
-            "arrangement": "AAA (Arrange-Act-Assert)",
-            "comments": True,
+            "arrangement": "AAA (Arrange-Act-Assert) structure",
+            "comments": False,
             "imports_order": ["react", "testing-library", "components", "utils", "mocks"],
             "mock_location": "top of file after imports",
             "assertions_per_test": "1-3 related assertions",
@@ -1114,29 +1173,34 @@ def init_style_config() -> str:
         "validation_rules": [
             {"id": "has_describe", "description": "Test must use describe() blocks", "pattern": "describe\\s*\\("},
             {"id": "has_it_or_test", "description": "Test must use it() or test()", "pattern": "(it|test)\\s*\\("},
-            {"id": "it_uses_should", "description": "it() should start with 'should'", "pattern": "it\\s*\\(\\s*['\"]should"},
+            {"id": "it_uses_should", "description": "it() should start with 'should'", "pattern": "it\\s*\\(\\s*['\"]should", "warning": True},
             {"id": "has_assertions", "description": "Test must have assertions", "pattern": "expect\\s*\\("},
-            {"id": "has_aaa_comments", "description": "Test should have AAA comments", "pattern": "//\\s*(Arrange|Act|Assert)", "warning": True},
-            {"id": "no_only", "description": "No .only() in tests", "pattern": "\\.(only|skip)\\s*\\(", "must_not_match": True}
+            {"id": "has_aaa_comments", "description": "Test should have AAA comments (optional)", "pattern": "//\\s*(Arrange|Act|Assert)", "warning": True},
+            {"id": "no_only", "description": "No .only() or .skip() in tests", "pattern": "\\.(only|skip)\\s*\\(", "must_not_match": True}
         ]
     }
 
     try:
         with open(config_path, 'w') as f:
             json.dump(user_config, f, indent=2)
-        return f"""✅ Created config file: {config_path}
 
-This file controls how tests are written across your team.
+        return f"""╔{'═' * 60}╗
+║  ✅ Jest Helper Configuration Initialized                  ║
+╚{'═' * 60}╝
 
-**What to customize:**
-1. `style_guide` - Define your naming conventions and structure
-2. `validation_rules` - Add/modify rules for test validation
-3. `custom_rules` - Add team-specific guidelines
+📁 Created: {config_path}
 
-**Next steps:**
-1. Edit .jest-helper.json to match your team's preferences
-2. Commit this file to your repo so all devs use the same config
-3. Claude will now follow these rules when writing tests"""
+┌─ What to Customize ────────────────────────────────────────┐
+│ • style_guide      → Naming conventions and structure      │
+│ • validation_rules → Add/modify rules (required/warning)   │
+│ • custom_rules     → Team-specific guidelines              │
+└────────────────────────────────────────────────────────────┘
+
+┌─ Next Steps ───────────────────────────────────────────────┐
+│ 1. Edit .jest-helper.json to match team preferences        │
+│ 2. Commit to repo so all devs share the same config        │
+│ 3. Claude will enforce these rules when writing tests      │
+└────────────────────────────────────────────────────────────┘"""
     except Exception as e:
         return f"Error creating config file: {e}"
 
@@ -1228,8 +1292,151 @@ def get_example_tests(count: int = 2) -> str:
     return "\n".join(output)
 
 
+@mcp.tool()
+def rewrite_test_to_standard(test_file_path: str) -> str:
+    """
+    Analyze an existing test file and provide everything needed to rewrite it
+    to match team standards.
+
+    This tool bundles:
+    1. The current test content
+    2. Style validation results (what's wrong)
+    3. The appropriate template to follow
+    4. Clear instructions for rewriting
+
+    Use this when a developer asks to "fix", "update", or "refactor" an existing test.
+
+    Args:
+        test_file_path: Path to the test file to analyze and rewrite
+
+    Returns:
+        A comprehensive report with the test, violations, and rewrite guidance.
+    """
+    project_root = get_project_root()
+    full_path = Path(project_root) / test_file_path
+
+    if not full_path.exists():
+        return f"Error: File not found: {test_file_path}"
+
+    # Read the current test
+    try:
+        current_content = full_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return f"Error reading file: {e}"
+
+    # Detect test type based on content
+    test_type = "utility_function"  # default
+    if "render(" in current_content or "screen." in current_content:
+        if "renderHook(" in current_content:
+            test_type = "hook"
+        else:
+            test_type = "react_component"
+    elif "mock" in current_content.lower() and ("api" in current_content.lower() or "fetch" in current_content.lower() or "http" in current_content.lower()):
+        test_type = "api_service"
+
+    # Run validation
+    config = load_config()
+    rules = config.get("validation_rules", [])
+    style = config.get("style_guide", {})
+
+    issues = []
+    for rule in rules:
+        pattern = rule.get("pattern", "")
+        must_not_match = rule.get("must_not_match", False)
+        is_warning = rule.get("warning", False)
+        description = rule.get("description", "")
+
+        if not pattern:
+            continue
+
+        try:
+            matches = bool(re.search(pattern, current_content, re.MULTILINE | re.IGNORECASE))
+
+            if must_not_match and matches:
+                issues.append(f"❌ {description}")
+            elif not must_not_match and not matches:
+                prefix = "⚠️" if is_warning else "❌"
+                issues.append(f"{prefix} {description}")
+        except re.error:
+            pass
+
+    # Get the appropriate template
+    templates = config.get("templates", {})
+    template = templates.get(test_type, "")
+
+    # Build the output
+    output = [
+        f"╔{'═' * 64}╗",
+        f"║  🔄 TEST REWRITE ANALYSIS{' ' * 38}║",
+        f"╠{'═' * 64}╣",
+        f"║  File: {test_file_path[:55]:<55}║",
+        f"║  Detected Type: {test_type:<47}║",
+        f"╚{'═' * 64}╝",
+        "",
+    ]
+
+    # Issues found
+    if issues:
+        output.append("┌─ Issues to Fix ────────────────────────────────────────────┐")
+        for issue in issues:
+            output.append(f"│ {issue:<62}│")
+        output.append("└────────────────────────────────────────────────────────────┘")
+    else:
+        output.append("┌─ Validation ───────────────────────────────────────────────┐")
+        output.append("│ ✅ No major issues found - test follows standards          │")
+        output.append("└────────────────────────────────────────────────────────────┘")
+    output.append("")
+
+    # Style guide summary
+    output.append("┌─ Required Style ──────────────────────────────────────────┐")
+    output.append(f"│ Structure    : {style.get('test_structure', 'describe + it'):<48}│")
+    output.append(f"│ it() naming  : {style.get('it_naming', 'should + verb'):<48}│")
+    output.append(f"│ Arrangement  : {style.get('arrangement', 'AAA structure'):<48}│")
+    output.append("└────────────────────────────────────────────────────────────┘")
+    output.append("")
+
+    # Current test content
+    output.append("┌─ Current Test Content ─────────────────────────────────────┐")
+    output.append("```typescript")
+    # Truncate if too long
+    lines = current_content.split('\n')
+    if len(lines) > 60:
+        output.extend(lines[:30])
+        output.append(f"\n// ... [{len(lines) - 60} lines omitted] ...\n")
+        output.extend(lines[-30:])
+    else:
+        output.append(current_content)
+    output.append("```")
+    output.append("└────────────────────────────────────────────────────────────┘")
+    output.append("")
+
+    # Template to follow
+    output.append(f"┌─ Template to Follow ({test_type}) ─────────────────────────┐")
+    output.append("```typescript")
+    output.append(template)
+    output.append("```")
+    output.append("└────────────────────────────────────────────────────────────┘")
+    output.append("")
+
+    # Instructions
+    output.append("┌─ Rewrite Instructions ─────────────────────────────────────┐")
+    output.append("│ 1. Follow the template structure exactly                   │")
+    output.append("│ 2. Keep the same test logic but fix the style issues       │")
+    output.append("│ 3. Use 'should + verb' naming for it() blocks              │")
+    output.append("│ 4. Group related tests in describe() blocks                │")
+    output.append("│ 5. Maintain AAA structure (Arrange/Act/Assert spacing)     │")
+    output.append("│ 6. Use update_test_section() to apply changes              │")
+    output.append("└────────────────────────────────────────────────────────────┘")
+
+    return "\n".join(output)
+
+
 # ============================================================
 # RUN THE SERVER
 # ============================================================
 if __name__ == "__main__":
+    import sys
+    print("🚀 Jest Helper MCP Server starting...", file=sys.stderr)
+    print(f"📁 Project root: {get_project_root()}", file=sys.stderr)
+    print("✅ Ready to accept connections", file=sys.stderr)
     mcp.run(transport='stdio')
