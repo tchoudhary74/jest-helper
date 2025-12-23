@@ -1,124 +1,196 @@
-🧪 Jest Helper MCP (Claude) — Standardizing Unit Tests at Scale
+# Jest Helper MCP — Setup Guide (DevSpaces)
 
-Why I Built This
+This repository contains a **Python-based MCP server** used to assist with Jest testing workflows.  
+Once running, it integrates with Claude via MCP and operates on a target project (defined by `PROJECT_ROOT`).
 
-Our biggest problem with tests isn’t Jest itself — it’s inconsistency.
-	•	Every developer writes tests differently
-	•	Reviews waste time on style instead of intent
-	•	Fixing or adding tests is slow because “what’s the right pattern?” isn’t obvious
+Follow the steps below in order. This setup is intentionally strict to avoid environment issues.
 
-This MCP solves that by giving Claude controlled access to our repo so it can:
-	•	understand how we already write tests
-	•	write new tests that match our style
-	•	enforce consistency automatically
+-----
 
-The goal is simple:
-tests should look like they were written by one disciplined team, not ten individuals.
+## Prerequisites
 
-⸻
+- DevSpaces access
+- Python available in the workspace
+- Artifactory access for Python packages
 
-What This MCP Actually Does
+-----
 
-This is a FastMCP server called jest-helper that runs inside a repo and exposes a focused set of tools Claude can use.
+## Step 1: Clone the Repository
 
-At a high level, it supports five things:
-	1.	Read & understand existing tests
-	2.	Analyze test patterns used in the repo
-	3.	Run Jest tests safely
-	4.	Write or update test files
-	5.	Validate tests against team rules
+Clone the Jest Helper MCP repo into your DevSpaces workspace.
 
-Everything is scoped to the project root and guarded by strict safety checks.
+```bash
+git clone <repo-url>
+cd mock-server
+```
 
-⸻
+In the examples below, the repo is cloned to:
 
-Safety & Guardrails (By Design)
+```
+/home/user/app/mock-server
+```
 
-This MCP is intentionally restrictive:
-	•	✅ Can only read files inside the repo
-	•	✅ Can only write *.test.* or *.spec.* files
-	•	✅ File reads capped at 1MB
-	•	✅ Large outputs are truncated automatically
-	•	❌ No access outside PROJECT_ROOT
+If your path differs, update it accordingly in the MCP config.
 
-This makes it safe to use locally, in devspaces, or later in CI-style automation.
+-----
 
-⸻
+## Step 2: Configure pip for Artifactory
 
-Configuration Model
+Before installing anything, export the required pip settings.
 
-If .jest-helper.json exists → it’s used
-If not → sensible defaults apply
+```bash
+export PIP_TRUSTED_HOST=<your-artifactory-host>
+export PIP_INDEX_URL=<your-artifactory-pypi-url>
+export PIP_DEFAULT_TIMEOUT=100
+```
 
-The config controls:
-	•	test structure rules (describe/it, naming, AAA)
-	•	templates (React, hooks, utilities, API tests)
-	•	validation rules (required vs warning vs forbidden)
+These must be set in the same terminal session.
 
-There’s also a helper tool to generate a starter config and commit it so the entire team shares the same standards.
+-----
 
-⸻
+## Step 3: Install and Verify uv
 
-Core Tooling (What Claude Can Do)
+Install (or upgrade) uv using Python.
 
-🧠 Understand the Codebase
-	•	Find all test files
-	•	Read test or source files safely
-	•	Infer which source file a test maps to
-	•	Analyze real test patterns (imports, mocks, assertions, naming)
+```bash
+python -m pip install --upgrade uv
+```
 
-This is how Claude learns our style instead of guessing.
+Verify the installation:
 
-⸻
+```bash
+uv --version
+```
 
-🏃 Run Tests
-	•	Run all tests, a single file, or a single test name
-	•	Optional coverage
-	•	Clean, readable output with pass/fail summaries
+If this fails, fix uv before continuing.
 
-Good for tight feedback loops while fixing or writing tests.
+-----
 
-⸻
+## Step 4: Install Dependencies Using uv
 
-✍️ Write & Update Tests
-	•	Create new test files using approved templates
-	•	Update specific sections of an existing test (surgical changes, clean diffs)
+From the root of the cloned repo:
 
-No free-form file editing. Everything stays controlled.
+```bash
+uv sync --native-tls
+```
 
-⸻
+This installs all required dependencies in a reproducible way.
 
-✅ Enforce Consistency
-	•	Get the official team test style guide
-	•	Generate canonical test templates
-	•	Validate a test file against regex-based rules
-	•	Analyze a test and tell you exactly how to rewrite it to standard
+-----
 
-This is the part that turns “guidelines” into something enforceable.
+## Step 5: Activate the Python Virtual Environment
 
-⸻
+This project runs inside a virtual environment created by uv.
 
-Recommended Developer Flow
+```bash
+source .venv/bin/activate
+```
 
-When adding a new test
-	1.	Read the style guide
-	2.	Use the correct template
-	3.	Write the test
-	4.	Validate it
-	5.	Run it
+You should now see the virtual environment active in your shell.
 
-When fixing an existing test
-	1.	Run the failing test
-	2.	Ask for rewrite guidance if needed
-	3.	Update only the broken section
-	4.	Validate and re-run
+-----
 
-⸻
+## Step 6: Add Claude MCP Configuration
 
-Why This Works Well
-	•	It’s opinionated but configurable
-	•	It learns from our repo, not generic examples
-	•	It removes style debates from code reviews
-	•	It scales across teams without relying on tribal knowledge
+Create the following file:
 
-This MCP turns Claude into a test-aware team member, not just a code generator.
+```
+.cloud/claude_mcp.json
+```
+
+Add the configuration below.
+
+```json
+{
+  "mcpServers": {
+    "jest-helper": {
+      "command": "/home/user/app/mock-server/.venv/bin/python",
+      "args": [
+        "/home/user/app/mock-server/src/jest_helper/server.py"
+      ],
+      "env": {
+        "PROJECT_ROOT": "/home/user/app/riskApps/rdm-ui/rdm-ui"
+      }
+    }
+  }
+}
+```
+
+**Important Notes**
+
+- `/home/user/app/mock-server`  
+  → Path where this repo is cloned
+- `args`  
+  → Must point to the MCP server entry file inside this repo
+- `PROJECT_ROOT`  
+  → Path to the project you want this MCP to operate on (not this repo)
+
+Update paths if your workspace layout is different.
+
+-----
+
+## Step 7: Start the MCP Server
+
+With the virtual environment still active:
+
+```bash
+python src/jest_helper/server.py
+```
+
+You should see logs indicating:
+
+- project root detected
+- MCP server started
+- ready to accept connections
+
+Leave this running.
+
+-----
+
+## Step 8: Restart DevSpaces
+
+After:
+
+- adding `.cloud/claude_mcp.json`
+- starting the MCP server
+
+Restart DevSpaces so Claude picks up the MCP configuration.
+
+This step is required.
+
+-----
+
+## Verification
+
+Once restarted:
+
+- Claude should recognize the jest-helper MCP
+- MCP tools should be available
+- Test discovery / validation / generation should work
+
+If something fails:
+
+- double-check paths in `claude_mcp.json`
+- confirm `.venv` is active
+- verify pip / Artifactory env vars
+
+-----
+
+## Quick Checklist
+
+- [ ] Repo cloned under `/home/user/app/mock-server`
+- [ ] pip env vars exported
+- [ ] uv installed and verified
+- [ ] `uv sync --native-tls` completed
+- [ ] `.venv` activated
+- [ ] `.cloud/claude_mcp.json` added
+- [ ] MCP server running
+- [ ] DevSpaces restarted
+
+-----
+
+## Notes
+
+- Do not commit `.venv`
+- Commit `claude_mcp.json` only if intended for team-wide use
+- Restart DevSpaces anytime MCP config changes
